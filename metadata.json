@@ -1,0 +1,12 @@
+{
+  "name": "SkyTalk Flanders",
+  "description": "A futuristic language learning cockpit for plane lovers to master Flemish through aviation-themed missions.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "AI-powered language tutoring",
+    "Aviation-themed immersive UI",
+    "Interactive Flemish practice"
+  ]
+}

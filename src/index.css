@@ -1,0 +1,48 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Outfit:wght@300;400;600;900&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+:root {
+  --cockpit-amber: #ffb703;
+  --cockpit-cyan: #219ebc;
+  --cockpit-blue-deep: #023047;
+}
+
+body {
+  background-color: var(--cockpit-blue-deep);
+  color: white;
+  overflow: hidden;
+  user-select: none;
+}
+
+.glass-panel {
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+}
+
+.pulsing-amber {
+  box-shadow: 0 0 15px var(--cockpit-amber);
+}
+
+.scanline {
+  width: 100%;
+  height: 2px;
+  background: rgba(33, 158, 188, 0.1);
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 50;
+  pointer-events: none;
+  animation: scan 8s linear infinite;
+}
+
+@keyframes scan {
+  0% { top: 0; }
+  100% { top: 100%; }
+}
