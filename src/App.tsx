@@ -264,6 +264,26 @@ export default function App() {
     }
   };
 
+  const initiatePractice = async () => {
+    if (!selectedLesson) return;
+    
+    const lessonTitle = selectedLesson.title;
+    setSelectedLesson(null);
+    setActiveTab('copilot');
+    
+    setIsTyping(true);
+    setChatHistory(prev => [...prev, { role: 'user', text: `I want to practice my Flemish for the mission: ${lessonTitle}.` }]);
+    
+    try {
+      const response = await getCoPilotResponse(chatHistory, `The pilot wants to practice the mission: "${lessonTitle}". Start a short roleplay or quiz them on the phrases from this mission in a futuristic aviation context.`);
+      setChatHistory(prev => [...prev, { role: 'model', text: response }]);
+    } catch (err) {
+      setSystemError("COMMS LINK FAILURE: AI practice module offline.");
+    } finally {
+      setIsTyping(false);
+    }
+  };
+
   const completeMission = async (id: string) => {
     if (!selectedLesson) return;
     
@@ -727,7 +747,7 @@ export default function App() {
                       Complete Mission
                     </button>
                     <button 
-                      onClick={() => setActiveTab('copilot')}
+                      onClick={initiatePractice}
                       className="px-6 py-4 border border-white/10 text-white/60 font-bold uppercase tracking-widest rounded-xl hover:border-white/30 transition-all flex items-center justify-center gap-2"
                     >
                       <Mic size={20} />
