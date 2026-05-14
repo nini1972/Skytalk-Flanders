@@ -311,7 +311,7 @@ export default function App() {
   };
 
   return (
-    <div className="h-screen w-full flex flex-col font-sans select-none overflow-hidden bg-slate-950 text-slate-100 p-4 md:p-6 lg:p-8">
+    <div className="h-[100dvh] w-full flex flex-col font-sans select-none overflow-hidden bg-slate-950 text-slate-100 p-4 md:p-6 lg:p-8">
       {/* Background Ambience */}
       <div className="fixed inset-0 pointer-events-none opacity-20">
         <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-cyan-500 rounded-full blur-[100px] animate-pulse" />
