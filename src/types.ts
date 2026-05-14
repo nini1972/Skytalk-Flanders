@@ -21,6 +21,7 @@ export interface UserStats {
   altitude: number; // Experience points
   lastFlight: string;
   completedMissions: string[];
+  preferredLanguage: 'en-US' | 'it-IT' | 'nl-BE';
 }
 
 export interface ChatMessage {

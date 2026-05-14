@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Modality } from "@google/genai";
 import { ChatMessage } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
@@ -26,8 +26,25 @@ export async function getCoPilotResponse(history: ChatMessage[], message: string
     },
   });
 
-  // Convert history to Gemini format
-  // Note: history should not include the latest message which is sent via sendMessage
   const response = await chat.sendMessage({ message });
   return response.text;
+}
+
+export async function getTTS(text: string) {
+  const response = await ai.models.generateContent({
+    model: "gemini-3.1-flash-tts-preview",
+    contents: [{ parts: [{ text: `Say in Flemish (Belgian accent): ${text}` }] }],
+    config: {
+      responseModalities: [Modality.AUDIO],
+      speechConfig: {
+        voiceConfig: {
+          // 'Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr'
+          prebuiltVoiceConfig: { voiceName: 'Zephyr' },
+        },
+      },
+    },
+  });
+
+  const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+  return base64Audio;
 }

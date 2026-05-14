@@ -22,7 +22,34 @@ import {
 } from 'lucide-react';
 import { Lesson, UserStats, ChatMessage } from './types';
 import { LESSONS } from './constants';
-import { getCoPilotResponse } from './services/gemini';
+import { getCoPilotResponse, getTTS } from './services/gemini';
+
+// --- Audio Helpers ---
+
+const playPCM = async (base64Data: string) => {
+  try {
+    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+    const arrayBuffer = Uint8Array.from(atob(base64Data), c => c.charCodeAt(0)).buffer;
+    
+    // Assuming 16-bit PCM (2 bytes per sample)
+    const float32Data = new Float32Array(arrayBuffer.byteLength / 2);
+    const int16Data = new Int16Array(arrayBuffer);
+    
+    for (let i = 0; i < int16Data.length; i++) {
+      float32Data[i] = int16Data[i] / 32768.0;
+    }
+
+    const audioBuffer = audioCtx.createBuffer(1, float32Data.length, 24000);
+    audioBuffer.getChannelData(0).set(float32Data);
+
+    const source = audioCtx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(audioCtx.destination);
+    source.start();
+  } catch (error) {
+    console.error("Audio playback failed:", error);
+  }
+};
 
 // --- Shared Components ---
 
@@ -61,35 +88,177 @@ export default function App() {
   const [chatHistory, setChatHistory] = React.useState<ChatMessage[]>([]);
   const [userInput, setUserInput] = React.useState('');
   const [isTyping, setIsTyping] = React.useState(false);
+  const [isListening, setIsListening] = React.useState(false);
+  const [isSpeaking, setIsSpeaking] = React.useState(false);
+  const [signalLevel, setSignalLevel] = React.useState(0);
+  const [systemError, setSystemError] = React.useState<string | null>(null);
   const [userStats, setUserStats] = React.useState<UserStats>({
     fuel: 85,
     altitude: 12400,
     lastFlight: '2036-05-13',
-    completedMissions: []
+    completedMissions: [],
+    preferredLanguage: 'en-US'
   });
 
   const chatEndRef = React.useRef<HTMLDivElement>(null);
+  const analyzerRef = React.useRef<AnalyserNode | null>(null);
+  const animationFrameRef = React.useRef<number | null>(null);
+  const recognitionRef = React.useRef<any>(null);
 
+  // Auto-scroll to bottom on chat update
   React.useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatHistory]);
 
-  const handleSendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!userInput.trim()) return;
+  // High-performance frequency monitoring
+  const updateAudioLevels = () => {
+    if (!analyzerRef.current) return;
+    
+    // Use Frequency Data for better sensitivity to speaking range
+    const dataArray = new Uint8Array(analyzerRef.current.frequencyBinCount);
+    analyzerRef.current.getByteFrequencyData(dataArray);
+    
+    // Focus on human speech frequencies (roughly the middle of the spectrum we're capturing)
+    let total = 0;
+    const startBin = 2; // Skip sub-bass
+    const endBin = Math.min(dataArray.length, 32); 
+    for (let i = startBin; i < endBin; i++) {
+      total += dataArray[i];
+    }
+    const average = total / (endBin - startBin);
+    
+    // Boost signal for visibility (0-100 scale)
+    const boosted = Math.min(100, Math.round(average * 2.5));
+    setSignalLevel(boosted);
+    setIsSpeaking(boosted > 15);
+    
+    animationFrameRef.current = requestAnimationFrame(updateAudioLevels);
+  };
 
-    const newMessage: ChatMessage = { role: 'user', text: userInput };
+  const handleSendMessage = async (e?: React.FormEvent, manualText?: string) => {
+    if (e) e.preventDefault();
+    const textToSend = manualText || userInput;
+    if (!textToSend.trim()) return;
+
+    const newMessage: ChatMessage = { role: 'user', text: textToSend };
     setChatHistory(prev => [...prev, newMessage]);
     setUserInput('');
     setIsTyping(true);
+    setSystemError(null);
 
     try {
-      const response = await getCoPilotResponse(chatHistory, userInput);
+      const response = await getCoPilotResponse(chatHistory, textToSend);
       setChatHistory(prev => [...prev, { role: 'model', text: response }]);
     } catch (err) {
+      setSystemError("SIGNAL LOST: Connection to Zaventem ATC timed out.");
       setChatHistory(prev => [...prev, { role: 'model', text: "Error: Signal lost. Check your connection to Zaventem ATC." }]);
     } finally {
       setIsTyping(false);
+    }
+  };
+
+  const handleSpeak = async (text: string) => {
+    try {
+      const audio = await getTTS(text);
+      if (audio) {
+        await playPCM(audio);
+      }
+    } catch (err) {
+      console.error("TTS failed:", err);
+      setSystemError("AUDIO FAULT: Unable to initialize voice synthesis.");
+    }
+  };
+
+  const stopComms = () => {
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch (e) {}
+    }
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+    }
+    setIsListening(false);
+    setIsSpeaking(false);
+    setSignalLevel(0);
+  };
+
+  const handleVoiceInput = async () => {
+    if (isListening) {
+      stopComms();
+      return;
+    }
+
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setSystemError("HARDWARE INCOMPATIBILITY: Recognition not supported.");
+      return;
+    }
+
+    try {
+      setSystemError(null);
+      
+      // 1. Initialize Audio Analyzer for the HUD bars
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        } 
+      });
+      
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      if (audioCtx.state === 'suspended') {
+        await audioCtx.resume();
+      }
+      
+      const source = audioCtx.createMediaStreamSource(stream);
+      const analyzer = audioCtx.createAnalyser();
+      analyzer.fftSize = 256; 
+      source.connect(analyzer);
+      analyzerRef.current = analyzer;
+      
+      // 2. Initialize Speech Engine
+      const recognition = new SpeechRecognition();
+      recognition.lang = userStats.preferredLanguage;
+      recognition.interimResults = true;
+      recognition.continuous = false;
+
+      recognition.onstart = () => {
+        setIsListening(true);
+        updateAudioLevels();
+      };
+
+      recognition.onresult = (event: any) => {
+        const transcript = event.results[0][0].transcript;
+        setUserInput(transcript);
+        
+        if (event.results[0].isFinal) {
+          handleSendMessage(undefined, transcript);
+          stopComms();
+        }
+      };
+
+      recognition.onerror = (event: any) => {
+        stopComms();
+        if (event.error === 'no-speech') {
+          setSystemError("SIGNAL WEAK: No speech detected. Speak louder.");
+        } else if (event.error === 'not-allowed') {
+          setSystemError("SECURITY DENIAL: Mic access blocked.");
+        } else {
+          setSystemError(`FAULT: ${event.error.toUpperCase()}`);
+        }
+      };
+
+      recognition.onend = () => {
+        stream.getTracks().forEach(track => track.stop());
+        audioCtx.close();
+        stopComms();
+      };
+
+      recognitionRef.current = recognition;
+      recognition.start();
+
+    } catch (err) {
+      setSystemError("PERMISSIONS: Microphone hardware rejected.");
     }
   };
 
@@ -236,6 +405,26 @@ export default function App() {
                         </div>
                       </div>
                     </div>
+                    {/* Language Selector (Comms Frequency) */}
+                    <div className="flex gap-1 bg-white/5 p-1 rounded-lg border border-white/10">
+                      {[
+                        { id: 'en-US', label: 'EN' },
+                        { id: 'it-IT', label: 'IT' },
+                        { id: 'nl-BE', label: 'BE' }
+                      ].map(lang => (
+                        <button
+                          key={lang.id}
+                          onClick={() => setUserStats(s => ({ ...s, preferredLanguage: lang.id as any }))}
+                          className={`text-[9px] font-bold px-2 py-1 rounded transition-colors ${
+                            userStats.preferredLanguage === lang.id 
+                            ? 'bg-cyan-400 text-slate-950' 
+                            : 'text-white/40 hover:text-white'
+                          }`}
+                        >
+                          {lang.label}
+                        </button>
+                      ))}
+                    </div>
                     <button onClick={() => setChatHistory([])} className="text-white/30 hover:text-white/60 transition-colors">
                       <X size={18} />
                     </button>
@@ -255,7 +444,7 @@ export default function App() {
                         key={i}
                         initial={{ opacity: 0, y: 10 }}
                         animate={{ opacity: 1, y: 0 }}
-                        className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                        className={`flex gap-2 ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}
                       >
                         <div className={`max-w-[85%] rounded-2xl p-3 text-sm ${
                           msg.role === 'user' 
@@ -263,6 +452,14 @@ export default function App() {
                           : 'bg-white/10 text-white border border-white/10'
                         }`}>
                           {msg.text}
+                          {msg.role === 'model' && (
+                            <button 
+                              onClick={() => handleSpeak(msg.text)}
+                              className="block mt-2 text-[8px] uppercase tracking-widest text-cyan-400 hover:text-cyan-300 font-bold"
+                            >
+                              Play Audio
+                            </button>
+                          )}
                         </div>
                       </motion.div>
                     ))}
@@ -277,6 +474,34 @@ export default function App() {
                     )}
                     <div ref={chatEndRef} />
                   </div>
+
+                  {isListening && (
+                    <div className="flex items-center gap-2 mb-2 px-1">
+                      <div className="text-[8px] font-mono text-amber-400 uppercase tracking-tighter w-16">Comm signal</div>
+                      <div className="flex-1 h-1 bg-white/5 rounded-full overflow-hidden flex gap-0.5">
+                        {[...Array(20)].map((_, i) => (
+                          <div 
+                            key={i} 
+                            className={`flex-1 h-full transition-colors ${
+                              (signalLevel / 5) > i ? 'bg-amber-400' : 'bg-white/5'
+                            }`} 
+                          />
+                        ))}
+                      </div>
+                      <div className="text-[8px] font-mono text-white/40">{Math.round(signalLevel)}%</div>
+                    </div>
+                  )}
+
+                  {systemError && (
+                    <motion.div 
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="bg-red-500/20 border border-red-500/50 rounded-lg px-3 py-1.5 flex items-center gap-2 mb-3"
+                    >
+                      <Zap size={14} className="text-red-500 animate-pulse" />
+                      <span className="text-[10px] font-mono text-red-500 font-bold tracking-tight uppercase">System Alert: {systemError}</span>
+                    </motion.div>
+                  )}
 
                   <form onSubmit={handleSendMessage} className="flex gap-2">
                     <input
@@ -293,8 +518,35 @@ export default function App() {
                     >
                       <Zap size={20} />
                     </button>
-                    <button type="button" className="w-12 h-12 border border-white/10 rounded-xl flex items-center justify-center text-white/40 hover:text-cyan-400 hover:border-cyan-400/50 transition-all">
-                      <Mic size={20} />
+                    <button 
+                      type="button" 
+                      onClick={handleVoiceInput}
+                      className={`w-12 h-12 border rounded-xl flex flex-col items-center justify-center transition-all relative overflow-hidden ${
+                        isListening 
+                        ? 'bg-amber-400 border-amber-400 text-slate-950 shadow-[0_0_25px_rgba(251,191,36,0.8)] scale-105' 
+                        : 'border-white/10 text-white/40 hover:text-cyan-400 hover:border-cyan-400/50'
+                      }`}
+                    >
+                      {isListening && (
+                        <div className="absolute inset-0 flex items-center justify-center gap-1 opacity-40 pointer-events-none">
+                          {[...Array(5)].map((_, i) => (
+                            <motion.div
+                              key={i}
+                              animate={{ 
+                                height: `${20 + (signalLevel / 2)}%`,
+                                opacity: [0.3, 0.7, 0.3]
+                              }}
+                              transition={{ 
+                                repeat: Infinity, 
+                                duration: 0.5, 
+                                delay: i * 0.1 
+                              }}
+                              className="w-1 bg-slate-950 rounded-full"
+                            />
+                          ))}
+                        </div>
+                      )}
+                      <Mic size={20} className={`relative z-10 ${isListening ? 'animate-pulse' : ''}`} />
                     </button>
                   </form>
                 </GlassPanel>
@@ -435,7 +687,10 @@ export default function App() {
                       >
                         <div className="flex justify-between items-start">
                           <div className="text-lg font-bold text-cyan-400 font-mono italic">"{phrase.flemish}"</div>
-                          <button className="text-white/20 hover:text-white group-hover:text-cyan-400 transition-colors">
+                          <button 
+                            onClick={() => handleSpeak(phrase.flemish)}
+                            className="text-white/20 hover:text-white group-hover:text-cyan-400 transition-colors"
+                          >
                             <Play size={16} fill="currentColor" />
                           </button>
                         </div>
