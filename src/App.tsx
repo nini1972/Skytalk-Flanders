@@ -85,6 +85,8 @@ const LevelIndicator = ({ value, label, icon: Icon, color }: { value: number, la
 export default function App() {
   const [activeTab, setActiveTab] = React.useState<'missions' | 'copilot' | 'stats'>('missions');
   const [selectedLesson, setSelectedLesson] = React.useState<Lesson | null>(null);
+  const [showDebrief, setShowDebrief] = React.useState(false);
+  const [debriefText, setDebriefText] = React.useState('');
   const [chatHistory, setChatHistory] = React.useState<ChatMessage[]>([]);
   const [userInput, setUserInput] = React.useState('');
   const [isTyping, setIsTyping] = React.useState(false);
@@ -262,7 +264,13 @@ export default function App() {
     }
   };
 
-  const completeMission = (id: string) => {
+  const completeMission = async (id: string) => {
+    if (!selectedLesson) return;
+    
+    // Start debrief generation
+    setDebriefText("COMM LINK ESTABLISHED... ANALYZING MISSION DATA...");
+    setShowDebrief(true);
+    
     if (!userStats.completedMissions.includes(id)) {
       setUserStats(prev => ({
         ...prev,
@@ -271,6 +279,14 @@ export default function App() {
         completedMissions: [...prev.completedMissions, id]
       }));
     }
+
+    try {
+      const response = await getCoPilotResponse([], `I just completed the mission "${selectedLesson.title}". Give me a very short (2 sentence) aviation-themed congratulation in English, followed by one special "bonus" Flemish phrase related to this topic including its English translation. Keep it cool and futuristic.`);
+      setDebriefText(response);
+    } catch (err) {
+      setDebriefText("Excellent landing, Pilot! Mission data synchronized with Zaventem flight records. Bonus phrase: 'Tot de volgende keer!' (Until next time!)");
+    }
+
     setSelectedLesson(null);
   };
 
@@ -718,6 +734,60 @@ export default function App() {
                       Practice AI
                     </button>
                   </div>
+                </div>
+              </GlassPanel>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Mission Debrief Overlay */}
+      <AnimatePresence>
+        {showDebrief && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-950/90 backdrop-blur-xl"
+          >
+            <motion.div
+              initial={{ scale: 0.8, rotate: -2 }}
+              animate={{ scale: 1, rotate: 0 }}
+              className="max-w-md w-full"
+            >
+              <GlassPanel className="p-8 border-2 border-amber-400 pulsing-amber bg-slate-900">
+                <div className="flex flex-col items-center text-center">
+                  <div className="w-20 h-20 bg-amber-400 rounded-full flex items-center justify-center mb-6 shadow-[0_0_30px_rgba(251,191,36,0.6)]">
+                    <Zap size={40} className="text-slate-950" />
+                  </div>
+                  
+                  <h2 className="text-3xl font-black italic tracking-tighter text-white mb-2">MISSION ACCOMPLISHED</h2>
+                  <div className="text-[10px] font-mono text-amber-400 tracking-[0.3em] uppercase mb-6">Flight Log Updated</div>
+                  
+                  <div className="w-full bg-white/5 rounded-xl p-6 border border-white/10 mb-6 relative overflow-hidden">
+                    <div className="absolute top-0 left-0 w-1 h-full bg-amber-400" />
+                    <div className="text-sm italic text-white/80 leading-relaxed font-mono">
+                      {debriefText}
+                    </div>
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-4 w-full mb-8">
+                    <div className="bg-white/5 p-3 rounded-lg border border-white/5">
+                      <div className="text-[9px] text-white/40 uppercase mb-1">Altitude Gain</div>
+                      <div className="text-xl font-bold text-cyan-400">+500 FT</div>
+                    </div>
+                    <div className="bg-white/5 p-3 rounded-lg border border-white/5">
+                      <div className="text-[9px] text-white/40 uppercase mb-1">Fuel Consumption</div>
+                      <div className="text-xl font-bold text-amber-500">-10%</div>
+                    </div>
+                  </div>
+                  
+                  <button 
+                    onClick={() => setShowDebrief(false)}
+                    className="w-full py-4 bg-white text-slate-950 font-black uppercase tracking-[0.2em] rounded-xl hover:bg-amber-400 hover:scale-105 transition-all shadow-xl"
+                  >
+                    Close Log & Return
+                  </button>
                 </div>
               </GlassPanel>
             </motion.div>
