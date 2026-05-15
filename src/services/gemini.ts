@@ -33,12 +33,11 @@ export async function getCoPilotResponse(history: ChatMessage[], message: string
 export async function getTTS(text: string) {
   const response = await ai.models.generateContent({
     model: "gemini-3.1-flash-tts-preview",
-    contents: [{ parts: [{ text: `Say in Flemish (Belgian accent): ${text}` }] }],
+    contents: [{ parts: [{ text: `Say this: ${text}` }] }],
     config: {
       responseModalities: [Modality.AUDIO],
       speechConfig: {
         voiceConfig: {
-          // 'Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr'
           prebuiltVoiceConfig: { voiceName: 'Zephyr' },
         },
       },

@@ -18,7 +18,8 @@ import {
   ChevronRight,
   ChevronLeft,
   X,
-  Play
+  Play,
+  Volume2
 } from 'lucide-react';
 import { Lesson, UserStats, ChatMessage } from './types';
 import { LESSONS } from './constants';
@@ -26,12 +27,20 @@ import { getCoPilotResponse, getTTS } from './services/gemini';
 
 // --- Audio Helpers ---
 
+let sharedAudioCtx: AudioContext | null = null;
+const getAudioCtx = () => {
+  if (!sharedAudioCtx) {
+    sharedAudioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+  }
+  return sharedAudioCtx;
+};
+
 const playPCM = async (base64Data: string) => {
   try {
-    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-    const arrayBuffer = Uint8Array.from(atob(base64Data), c => c.charCodeAt(0)).buffer;
+    const audioCtx = getAudioCtx();
+    if (audioCtx.state === 'suspended') await audioCtx.resume();
     
-    // Assuming 16-bit PCM (2 bytes per sample)
+    const arrayBuffer = Uint8Array.from(atob(base64Data), c => c.charCodeAt(0)).buffer;
     const float32Data = new Float32Array(arrayBuffer.byteLength / 2);
     const int16Data = new Int16Array(arrayBuffer);
     
@@ -45,7 +54,21 @@ const playPCM = async (base64Data: string) => {
     const source = audioCtx.createBufferSource();
     source.buffer = audioBuffer;
     source.connect(audioCtx.destination);
-    source.start();
+    
+    return new Promise<void>((resolve) => {
+      let resolved = false;
+      const finish = () => {
+        if (!resolved) {
+          resolved = true;
+          resolve();
+        }
+      };
+      
+      source.onended = finish;
+      // Safety timeout: actual duration + 200ms
+      setTimeout(finish, (audioBuffer.duration * 1000) + 200);
+      source.start();
+    });
   } catch (error) {
     console.error("Audio playback failed:", error);
   }
@@ -85,15 +108,22 @@ const LevelIndicator = ({ value, label, icon: Icon, color }: { value: number, la
 export default function App() {
   const [activeTab, setActiveTab] = React.useState<'missions' | 'copilot' | 'stats'>('missions');
   const [selectedLesson, setSelectedLesson] = React.useState<Lesson | null>(null);
+  const [showFlightPlan, setShowFlightPlan] = React.useState(false);
   const [showDebrief, setShowDebrief] = React.useState(false);
   const [debriefText, setDebriefText] = React.useState('');
+  const [lastImpact, setLastImpact] = React.useState({ fuel: 0, altitude: 0 });
   const [chatHistory, setChatHistory] = React.useState<ChatMessage[]>([]);
   const [userInput, setUserInput] = React.useState('');
   const [isTyping, setIsTyping] = React.useState(false);
   const [isListening, setIsListening] = React.useState(false);
-  const [isSpeaking, setIsSpeaking] = React.useState(false);
+  const [isTtsSpeaking, setIsTtsSpeaking] = React.useState(false);
+  const [isMicSpeaking, setIsMicSpeaking] = React.useState(false);
   const [signalLevel, setSignalLevel] = React.useState(0);
   const [systemError, setSystemError] = React.useState<string | null>(null);
+  const [currentWeather, setCurrentWeather] = React.useState({
+    condition: 'Windy' as 'Clear' | 'Windy' | 'Rainy' | 'Foggy',
+    severity: 2 // 1-3
+  });
   const [userStats, setUserStats] = React.useState<UserStats>({
     fuel: 85,
     altitude: 12400,
@@ -132,7 +162,7 @@ export default function App() {
     // Boost signal for visibility (0-100 scale)
     const boosted = Math.min(100, Math.round(average * 2.5));
     setSignalLevel(boosted);
-    setIsSpeaking(boosted > 15);
+    setIsMicSpeaking(boosted > 15);
     
     animationFrameRef.current = requestAnimationFrame(updateAudioLevels);
   };
@@ -160,14 +190,74 @@ export default function App() {
   };
 
   const handleSpeak = async (text: string) => {
+    if (isTtsSpeaking) return;
+    
     try {
-      const audio = await getTTS(text);
-      if (audio) {
-        await playPCM(audio);
+      // 1. Clean Markdown and special characters
+      const cleaned = text
+        .replace(/\*\*\s*/g, "")
+        .replace(/\s*\*\*/g, "")
+        .replace(/\*\s*/g, "")
+        .replace(/\s*\*/g, "")
+        .replace(/[#`_]/g, "")
+        .trim();
+
+      // 2. Split into sentences but avoid tiny fragments (like "1. ")
+      const chunks = cleaned.match(/[^.!?:]+[.!?:]*/g) || [cleaned];
+      const finalChunks = chunks
+        .map(c => c.trim())
+        .filter(c => c.length > 2)
+        .slice(0, 15);
+
+      if (finalChunks.length === 0) return;
+
+      setIsTtsSpeaking(true);
+      
+      // 3. Sequential Pre-fetching with a safe Buffer
+      const audioBuffer: (string | null)[] = [];
+      let fetchIdx = 0;
+      let playIdx = 0;
+      const MAX_CONCURRENT_FETCHES = 2;
+
+      const fetchNext = async () => {
+        if (fetchIdx >= finalChunks.length) return;
+        const currentIdx = fetchIdx++;
+        try {
+          const audio = await getTTS(finalChunks[currentIdx]);
+          audioBuffer[currentIdx] = audio || null;
+        } catch (e) {
+          console.error(`TTS fetch failed for chunk ${currentIdx}:`, e);
+          audioBuffer[currentIdx] = null;
+        }
+      };
+
+      // Initial buffer fill
+      for (let i = 0; i < MAX_CONCURRENT_FETCHES; i++) fetchNext();
+
+      // Playback loop
+      while (playIdx < finalChunks.length) {
+        // Wait for current audio data with timeout
+        let waitAttempts = 0;
+        while (audioBuffer[playIdx] === undefined && waitAttempts < 100) {
+          await new Promise(r => setTimeout(r, 50));
+          waitAttempts++;
+          if (waitAttempts % 20 === 0) fetchNext(); // Nudge fetcher
+        }
+
+        const audio = audioBuffer[playIdx];
+        if (audio) {
+          await playPCM(audio);
+        }
+
+        playIdx++;
+        fetchNext(); // Keep the buffer moving
       }
+
     } catch (err) {
-      console.error("TTS failed:", err);
-      setSystemError("AUDIO FAULT: Unable to initialize voice synthesis.");
+      console.error("TTS overall system fault:", err);
+      setSystemError("VOICE COMMS: Frequency drift detected.");
+    } finally {
+      setIsTtsSpeaking(false);
     }
   };
 
@@ -179,7 +269,7 @@ export default function App() {
       cancelAnimationFrame(animationFrameRef.current);
     }
     setIsListening(false);
-    setIsSpeaking(false);
+    setIsTtsSpeaking(false);
     setSignalLevel(0);
   };
 
@@ -291,20 +381,48 @@ export default function App() {
     setDebriefText("COMM LINK ESTABLISHED... ANALYZING MISSION DATA...");
     setShowDebrief(true);
     
+    const hasWeatherBriefing = userStats.completedMissions.includes('weather-briefing') || id === 'weather-briefing';
+    const isChallengingWeather = currentWeather.condition !== 'Clear';
+    
+    // Calculate Penalties/Rewards
+    let fuelPenalty = 10;
+    let altitudeGain = 500;
+    let weatherAlert = "";
+
+    if (isChallengingWeather) {
+      if (hasWeatherBriefing) {
+        weatherAlert = "WEATHER MITIGATION ACTIVE: Your weather briefing allowed for optimal routing.";
+        fuelPenalty = 8; // Preparation bonus
+        altitudeGain = 600;
+      } else {
+        weatherAlert = "WARNING: Unprepared for adverse weather. Heavy fuel consumption reported.";
+        fuelPenalty = 15; // Unprepared penalty
+        altitudeGain = 400;
+      }
+    }
+
     if (!userStats.completedMissions.includes(id)) {
+      setLastImpact({ fuel: fuelPenalty, altitude: altitudeGain });
       setUserStats(prev => ({
         ...prev,
-        altitude: prev.altitude + 500,
-        fuel: Math.max(0, prev.fuel - 10),
+        altitude: prev.altitude + altitudeGain,
+        fuel: Math.max(0, prev.fuel - fuelPenalty),
         completedMissions: [...prev.completedMissions, id]
       }));
+    } else {
+      setLastImpact({ fuel: 0, altitude: 0 }); // No new impact if already completed
     }
 
     try {
-      const response = await getCoPilotResponse([], `I just completed the mission "${selectedLesson.title}". Give me a very short (2 sentence) aviation-themed congratulation in English, followed by one special "bonus" Flemish phrase related to this topic including its English translation. Keep it cool and futuristic.`);
+      const prompt = `I just completed the mission "${selectedLesson.title}". ${weatherAlert ? "Context: " + weatherAlert : ""} Give me a very short (2 sentence) aviation-themed congratulation in English, followed by one special "bonus" Flemish phrase related to this topic including its English translation. Keep it cool and futuristic.`;
+      const response = await getCoPilotResponse([], prompt);
       setDebriefText(response);
+      handleSpeak(response);
     } catch (err) {
-      setDebriefText("Excellent landing, Pilot! Mission data synchronized with Zaventem flight records. Bonus phrase: 'Tot de volgende keer!' (Until next time!)");
+      console.error("Debrief feedback error:", err);
+      const fallback = `Excellent landing, Pilot! ${weatherAlert} Mission data synchronized. Bonus: 'Tot de volgende keer!' (Until next time!)`;
+      setDebriefText(fallback);
+      handleSpeak(fallback);
     }
 
     setSelectedLesson(null);
@@ -326,8 +444,13 @@ export default function App() {
             <span className="text-white">SkyTalk</span>
             <span className="text-cyan-400 opacity-50">/FLANDERS</span>
           </h1>
-          <div className="text-[10px] font-mono text-cyan-400/70 tracking-widest uppercase">
-            Location: Milan (LIMC) → Brussels (EBBR)
+          <div className="text-[10px] font-mono text-cyan-400/70 tracking-widest uppercase flex items-center gap-4">
+            <span>Location: Milan (LIMC) → Brussels (EBBR)</span>
+            <span className="h-3 w-px bg-white/20" />
+            <div className="flex items-center gap-1">
+              <Zap size={10} className={currentWeather.condition === 'Clear' ? 'text-emerald-400' : 'text-amber-400 animate-pulse'} />
+              <span>WX: {currentWeather.condition.toUpperCase()} / S{currentWeather.severity}</span>
+            </div>
           </div>
         </div>
 
@@ -643,7 +766,10 @@ export default function App() {
                     <p className="text-white/60 text-sm max-w-xs mb-6">
                       You've completed {userStats.completedMissions.length} missions this week. Your family in Belgium is waiting!
                     </p>
-                    <button className="px-8 py-3 bg-white text-slate-950 font-bold rounded-lg uppercase tracking-widest hover:scale-105 active:scale-95 transition-all">
+                    <button 
+                      onClick={() => setShowFlightPlan(true)}
+                      className="px-8 py-3 bg-white text-slate-950 font-bold rounded-lg uppercase tracking-widest hover:scale-105 active:scale-95 transition-all"
+                    >
                       Check Flight Plan
                     </button>
                   </div>
@@ -761,6 +887,108 @@ export default function App() {
         )}
       </AnimatePresence>
 
+      {/* Flight Plan Overlay */}
+      <AnimatePresence>
+        {showFlightPlan && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-950/95 backdrop-blur-2xl"
+          >
+            <motion.div
+              initial={{ scale: 0.95, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              className="max-w-3xl w-full h-[80vh] flex flex-col"
+            >
+              <GlassPanel className="flex-1 p-8 border-cyan-400/30 overflow-hidden flex flex-col">
+                <div className="flex justify-between items-start mb-8">
+                  <div className="flex gap-4 items-center">
+                    <div className="w-12 h-12 bg-cyan-400 rounded-lg flex items-center justify-center text-slate-950 shadow-[0_0_20px_rgba(34,211,238,0.4)]">
+                      <Navigation size={28} />
+                    </div>
+                    <div>
+                      <h2 className="text-2xl font-black italic uppercase tracking-tighter text-white">Flight Briefing: Z-200</h2>
+                      <div className="text-[10px] font-mono text-cyan-400 tracking-[0.3em] uppercase">Active Sector: Brussels-Antwerp-Ghent</div>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => setShowFlightPlan(false)}
+                    className="p-3 bg-white/5 hover:bg-white/10 rounded-xl transition-all border border-white/10"
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                  <div className="bg-white/5 p-4 rounded-xl border border-white/5">
+                    <div className="text-[9px] text-white/40 uppercase mb-2">Total Segments</div>
+                    <div className="text-3xl font-black text-white">{LESSONS.length}</div>
+                  </div>
+                  <div className="bg-white/5 p-4 rounded-xl border border-white/5">
+                    <div className="text-[9px] text-white/40 uppercase mb-2">Completion Rate</div>
+                    <div className="text-3xl font-black text-emerald-400">
+                      {Math.round((userStats.completedMissions.length / LESSONS.length) * 100)}%
+                    </div>
+                  </div>
+                  <div className="bg-white/5 p-4 rounded-xl border border-white/5">
+                    <div className="text-[9px] text-white/40 uppercase mb-2">Estimated Arrival</div>
+                    <div className="text-3xl font-black text-amber-500">20:30 <span className="text-xs">Z</span></div>
+                  </div>
+                </div>
+
+                <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-3">
+                  <div className="text-[10px] font-mono text-white/20 uppercase tracking-widest mb-4">Route Plan</div>
+                  {LESSONS.map((lesson, idx) => {
+                    const isCompleted = userStats.completedMissions.includes(lesson.id);
+                    return (
+                      <div 
+                        key={lesson.id}
+                        className={`flex items-center gap-4 p-4 rounded-xl border transition-all ${
+                          isCompleted 
+                          ? 'bg-emerald-500/10 border-emerald-500/30' 
+                          : 'bg-white/5 border-white/10'
+                        }`}
+                      >
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center font-mono text-xs border ${
+                          isCompleted 
+                          ? 'bg-emerald-500 border-emerald-500 text-slate-950' 
+                          : 'border-white/20 text-white/40'
+                        }`}>
+                          {idx + 1}
+                        </div>
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2">
+                            <h4 className={`font-bold ${isCompleted ? 'text-emerald-400' : 'text-white'}`}>
+                              {lesson.title}
+                            </h4>
+                            {isCompleted && <Zap size={14} className="text-emerald-400 fill-emerald-400" />}
+                          </div>
+                          <div className="text-[10px] uppercase tracking-wider text-white/40 font-mono">
+                            Category: {lesson.category} | Difficulty: {lesson.difficulty}
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className={`text-[10px] font-mono font-bold px-2 py-1 rounded ${
+                            isCompleted ? 'bg-emerald-400/20 text-emerald-400' : 'bg-white/10 text-white/40'
+                          }`}>
+                            {isCompleted ? 'VERIFIED' : 'PENDING'}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="mt-8 pt-6 border-t border-white/10 italic text-[11px] text-white/30 font-mono text-center">
+                  * DATA SYNCHRONIZED WITH BRUSSELS FLIGHT CONTROL *
+                </div>
+              </GlassPanel>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Mission Debrief Overlay */}
       <AnimatePresence>
         {showDebrief && (
@@ -784,8 +1012,15 @@ export default function App() {
                   <h2 className="text-3xl font-black italic tracking-tighter text-white mb-2">MISSION ACCOMPLISHED</h2>
                   <div className="text-[10px] font-mono text-amber-400 tracking-[0.3em] uppercase mb-6">Flight Log Updated</div>
                   
-                  <div className="w-full bg-white/5 rounded-xl p-6 border border-white/10 mb-6 relative overflow-hidden">
+                  <div className="w-full bg-white/5 rounded-xl p-6 border border-white/10 mb-6 relative overflow-hidden group">
                     <div className="absolute top-0 left-0 w-1 h-full bg-amber-400" />
+                    <button 
+                      onClick={() => handleSpeak(debriefText)}
+                      className="absolute top-2 right-2 p-2 bg-white/5 hover:bg-white/10 rounded-lg text-white/40 hover:text-cyan-400 transition-colors"
+                      title="Replay Audio"
+                    >
+                      <Volume2 size={16} />
+                    </button>
                     <div className="text-sm italic text-white/80 leading-relaxed font-mono">
                       {debriefText}
                     </div>
@@ -794,11 +1029,11 @@ export default function App() {
                   <div className="grid grid-cols-2 gap-4 w-full mb-8">
                     <div className="bg-white/5 p-3 rounded-lg border border-white/5">
                       <div className="text-[9px] text-white/40 uppercase mb-1">Altitude Gain</div>
-                      <div className="text-xl font-bold text-cyan-400">+500 FT</div>
+                      <div className="text-xl font-bold text-cyan-400">+{lastImpact.altitude} FT</div>
                     </div>
                     <div className="bg-white/5 p-3 rounded-lg border border-white/5">
                       <div className="text-[9px] text-white/40 uppercase mb-1">Fuel Consumption</div>
-                      <div className="text-xl font-bold text-amber-500">-10%</div>
+                      <div className="text-xl font-bold text-amber-500">-{lastImpact.fuel}%</div>
                     </div>
                   </div>
                   
