@@ -105,6 +105,56 @@ const LevelIndicator = ({ value, label, icon: Icon, color }: { value: number, la
 
 // --- Main App ---
 
+const Radar = () => (
+  <div className="relative w-32 h-32 rounded-full border border-cyan-500/30 overflow-hidden bg-slate-900/50">
+    {/* Scanning Grid */}
+    <div className="absolute inset-0 grid grid-cols-4 grid-rows-4 opacity-20">
+      <div className="border-r border-b border-cyan-500/30" />
+      <div className="border-r border-b border-cyan-500/30" />
+      <div className="border-r border-b border-cyan-500/30" />
+      <div className="border-b border-cyan-500/30" />
+      <div className="border-r border-b border-cyan-500/30" />
+      <div className="border-r border-b border-cyan-500/30" />
+      <div className="border-r border-b border-cyan-500/30" />
+      <div className="border-b border-cyan-500/30" />
+      <div className="border-r border-b border-cyan-500/30" />
+      <div className="border-r border-b border-cyan-500/30" />
+      <div className="border-r border-b border-cyan-500/30" />
+      <div className="border-b border-cyan-500/30" />
+      <div className="border-r border-cyan-500/30" />
+      <div className="border-r border-cyan-500/30" />
+      <div className="border-r border-cyan-500/30" />
+      <div />
+    </div>
+    
+    {/* Concentric Circles */}
+    <div className="absolute inset-0 flex items-center justify-center">
+      <div className="w-3/4 h-3/4 rounded-full border border-cyan-500/20" />
+      <div className="w-1/2 h-1/2 rounded-full border border-cyan-500/20 absolute" />
+      <div className="w-1/4 h-1/4 rounded-full border border-cyan-500/20 absolute" />
+    </div>
+
+    {/* Rotating Beam */}
+    <motion.div 
+      className="absolute top-1/2 left-1/2 w-64 h-64 -mt-32 -ml-32 bg-[conic-gradient(from_0deg,transparent_300deg,rgba(34,211,238,0.3)_360deg)] rounded-full"
+      animate={{ rotate: 360 }}
+      transition={{ duration: 4, repeat: Infinity, ease: "linear" }}
+    />
+
+    {/* Blips */}
+    <motion.div 
+      className="absolute top-[20%] left-[60%] w-1.5 h-1.5 bg-amber-400 rounded-full shadow-[0_0_8px_rgba(251,191,36,0.8)]"
+      animate={{ opacity: [0, 1, 0] }}
+      transition={{ duration: 2, repeat: Infinity, delay: 1 }}
+    />
+    <motion.div 
+      className="absolute top-[70%] left-[30%] w-1.5 h-1.5 bg-cyan-400 rounded-full shadow-[0_0_8px_rgba(34,211,238,0.8)]"
+      animate={{ opacity: [0, 1, 0] }}
+      transition={{ duration: 2, repeat: Infinity, delay: 2.5 }}
+    />
+  </div>
+);
+
 export default function App() {
   const [activeTab, setActiveTab] = React.useState<'missions' | 'copilot' | 'stats'>('missions');
   const [selectedLesson, setSelectedLesson] = React.useState<Lesson | null>(null);
@@ -431,10 +481,21 @@ export default function App() {
   return (
     <div className="h-[100dvh] w-full flex flex-col font-sans select-none overflow-hidden bg-slate-950 text-slate-100 p-4 md:p-6 lg:p-8">
       {/* Background Ambience */}
-      <div className="fixed inset-0 pointer-events-none opacity-20">
+      <div className="fixed inset-0 pointer-events-none opacity-20 overflow-hidden">
         <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-cyan-500 rounded-full blur-[100px] animate-pulse" />
         <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-amber-500 rounded-full blur-[100px] opacity-30" />
+        
+        {/* Scanning Lines Overlay */}
+        <div className="absolute inset-0 bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))] z-[100] pointer-events-none bg-[length:100%_2px,3px_100%]" />
       </div>
+
+      {/* Futuristic CRT Flickering */}
+      <motion.div 
+        initial={{ opacity: 0 }}
+        animate={{ opacity: [0.01, 0.03, 0.01] }}
+        transition={{ duration: 0.1, repeat: Infinity }}
+        className="fixed inset-0 bg-white pointer-events-none z-[101]" 
+      />
 
       {/* Header HUD */}
       <header className="flex justify-between items-center mb-6 relative z-10">
@@ -455,12 +516,27 @@ export default function App() {
         </div>
 
         <div className="flex gap-4 items-center">
-          <div className="hidden md:flex flex-col items-end">
-            <div className="text-[10px] font-mono text-white/50 tracking-widest uppercase">Altitude</div>
-            <div className="text-xl font-mono text-amber-400 leading-none">
-              {userStats.altitude.toLocaleString()} <span className="text-xs opacity-50">FT</span>
-            </div>
-          </div>
+          <motion.div 
+            className="hidden md:flex flex-col items-end px-3 py-1 bg-white/5 rounded-lg border border-white/10 relative overflow-hidden group"
+            whileHover={{ scale: 1.02 }}
+          >
+            <div className="absolute inset-0 bg-amber-400/5 opacity-0 group-hover:opacity-100 transition-opacity" />
+            <div className="text-[10px] font-mono text-white/50 tracking-widest uppercase relative z-10">Altitude</div>
+            <motion.div 
+              className="text-xl font-mono text-amber-400 leading-none relative z-10 flex items-baseline gap-1"
+              animate={{ 
+                textShadow: [
+                  "0 0 8px rgba(251,191,36,0.2)",
+                  "0 0 15px rgba(251,191,36,0.6)",
+                  "0 0 8px rgba(251,191,36,0.2)"
+                ]
+              }}
+              transition={{ duration: 2, repeat: Infinity }}
+            >
+              {userStats.altitude.toLocaleString()} <span className="text-[10px] opacity-50 font-bold uppercase">FT</span>
+            </motion.div>
+            <div className="absolute bottom-0 left-0 h-[1px] bg-amber-400/30 w-full animate-pulse" />
+          </motion.div>
           <div className="w-10 h-10 rounded-full border-2 border-cyan-400 flex items-center justify-center bg-cyan-400/10 shadow-[0_0_10px_rgba(34,211,238,0.3)]">
             <Globe size={20} className="text-cyan-400" />
           </div>
@@ -720,19 +796,45 @@ export default function App() {
                 exit={{ opacity: 0, x: -20 }}
                 className="h-full flex flex-col gap-6"
               >
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <GlassPanel className="p-6">
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                  <GlassPanel className="p-6 lg:col-span-1 flex flex-col items-center justify-center">
+                    <h3 className="text-xs font-bold uppercase tracking-widest text-white/50 mb-6 flex items-center gap-2 self-start">
+                      <Navigation size={14} className="text-cyan-400" />
+                      Tactical Radar
+                    </h3>
+                    <Radar />
+                    <div className="mt-4 text-[9px] font-mono text-cyan-400/50 uppercase tracking-widest text-center">
+                      Scanning Belgian Sectors...
+                    </div>
+                  </GlassPanel>
+
+                  <GlassPanel className="p-6 lg:col-span-2">
                     <h3 className="text-xs font-bold uppercase tracking-widest text-white/50 mb-6 flex items-center gap-2">
                       <Zap size={14} className="text-amber-400" />
                       Energy & Resource Levels
                     </h3>
-                    <div className="space-y-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                       <LevelIndicator value={userStats.fuel} label="Fuel Reserves" icon={Zap} color="text-amber-400" />
                       <LevelIndicator value={Math.min(100, userStats.altitude / 200)} label="Course Mastery" icon={Navigation} color="text-cyan-400" />
                       <LevelIndicator value={42} label="Cultural Integration" icon={Globe} color="text-emerald-400" />
+                      <div className="p-4 bg-white/5 rounded-xl border border-white/5 flex flex-col justify-center">
+                        <div className="text-[10px] font-mono text-white/30 uppercase mb-2">Comms Stability</div>
+                        <div className="flex gap-1 h-3">
+                          {[...Array(12)].map((_, i) => (
+                            <motion.div 
+                              key={i} 
+                              className={`flex-1 rounded-sm ${i < 9 ? 'bg-emerald-400' : 'bg-white/10'}`}
+                              animate={{ opacity: [1, 0.5, 1] }}
+                              transition={{ duration: 1, repeat: Infinity, delay: i * 0.1 }}
+                            />
+                          ))}
+                        </div>
+                      </div>
                     </div>
                   </GlassPanel>
+                </div>
 
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 flex-1 min-h-0">
                   <GlassPanel className="p-6">
                     <h3 className="text-xs font-bold uppercase tracking-widest text-white/50 mb-4 flex items-center gap-2">
                       <Terminal size={14} className="text-cyan-400" />
@@ -756,24 +858,24 @@ export default function App() {
                       </div>
                     </div>
                   </GlassPanel>
+                  
+                  <GlassPanel className="p-6 relative group overflow-hidden">
+                    <div className="absolute inset-0 bg-gradient-to-br from-cyan-500/10 to-transparent pointer-events-none" />
+                    <div className="relative z-10 h-full flex flex-col justify-center items-center text-center">
+                      <Plane size={48} className="text-cyan-400 mb-4 animate-bounce" />
+                      <h2 className="text-2xl font-black mb-1 italic">FLIGHT STATUS: ACTIVE</h2>
+                      <p className="text-white/60 text-[11px] max-w-xs mb-4">
+                        You've completed {userStats.completedMissions.length} missions this week. Your family in Belgium is waiting!
+                      </p>
+                      <button 
+                        onClick={() => setShowFlightPlan(true)}
+                        className="px-8 py-3 bg-white text-slate-950 font-bold rounded-lg uppercase text-xs tracking-widest hover:scale-105 active:scale-95 transition-all"
+                      >
+                        Check Flight Plan
+                      </button>
+                    </div>
+                  </GlassPanel>
                 </div>
-
-                <GlassPanel className="flex-1 p-6 relative group overflow-hidden">
-                  <div className="absolute inset-0 bg-gradient-to-br from-cyan-500/10 to-transparent pointer-events-none" />
-                  <div className="relative z-10 h-full flex flex-col justify-center items-center text-center">
-                    <Plane size={48} className="text-cyan-400 mb-4 animate-bounce" />
-                    <h2 className="text-2xl font-black mb-2 italic">FLIGHT STATUS: ACTIVE</h2>
-                    <p className="text-white/60 text-sm max-w-xs mb-6">
-                      You've completed {userStats.completedMissions.length} missions this week. Your family in Belgium is waiting!
-                    </p>
-                    <button 
-                      onClick={() => setShowFlightPlan(true)}
-                      className="px-8 py-3 bg-white text-slate-950 font-bold rounded-lg uppercase tracking-widest hover:scale-105 active:scale-95 transition-all"
-                    >
-                      Check Flight Plan
-                    </button>
-                  </div>
-                </GlassPanel>
               </motion.div>
             )}
           </AnimatePresence>
